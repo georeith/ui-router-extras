@@ -1,8 +1,7 @@
 /**
-
  * UI-Router Extras: Sticky states, Future States, Deep State Redirect, Transition promise
  * Module: previous
- * @version 0.0.13
+ * @version 0.0.14
  * @link http://christopherthielen.github.io/ui-router-extras/
  * @license MIT License, http://www.opensource.org/licenses/MIT
  */
@@ -23,7 +22,7 @@ angular.module('ct.ui.router.extras.previous', [ 'ct.ui.router.extras.core', 'ct
           previous = $transition$.from;
         }
 
-        $transition$.promise.then(commit).catch(revert);
+        $transition$.promise.then(commit)['catch'](revert);
         function commit() { lastPrevious = null; }
         function revert() { previous = lastPrevious; }
       });
