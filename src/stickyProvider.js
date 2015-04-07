@@ -1,9 +1,20 @@
-$StickyStateProvider.$inject = [ '$stateProvider' ];
-function $StickyStateProvider($stateProvider) {
+angular.module("ct.ui.router.extras.sticky", [ 'ct.ui.router.extras.core' ]);
+
+var mod_sticky = angular.module("ct.ui.router.extras.sticky");
+
+$StickyStateProvider.$inject = [ '$stateProvider', 'uirextras_coreProvider' ];
+function $StickyStateProvider($stateProvider, uirextras_coreProvider) {
+  var core = uirextras_coreProvider;
+  var inheritParams = core.inheritParams;
+  var objectKeys = core.objectKeys;
+  var protoKeys = core.protoKeys;
+  var map = core.map;
+
   // Holds all the states which are inactivated.  Inactivated states can be either sticky states, or descendants of sticky states.
   var inactiveStates = {}; // state.name -> (state)
   var stickyStates = {}; // state.name -> true
   var $state;
+  var DEBUG = false;
 
   // Called by $stateProvider.registerState();
   // registers a sticky state with $stickyStateProvider
@@ -12,8 +23,10 @@ function $StickyStateProvider($stateProvider) {
     // console.log("Registered sticky state: ", state);
   };
 
-  this.enableDebug = function (enabled) {
-    DEBUG = enabled;
+  this.enableDebug = this.debugMode = function (enabled) {
+    if (angular.isDefined(enabled))
+      DEBUG = enabled;
+    return DEBUG;
   };
 
   this.$get = [  '$rootScope', '$state', '$stateParams', '$injector', '$log',
@@ -36,6 +49,18 @@ function $StickyStateProvider($stateProvider) {
           }
         });
         return mappedStates;
+      }
+
+      function mapInactivesByImmediateParent() {
+        var inactivesByAllParents ={};
+        forEach(inactiveStates, function(state) {
+          forEach(state.path, function(ancestor) {
+            if (ancestor === state) return;
+            inactivesByAllParents[ancestor.name] = inactivesByAllParents[ancestor.name] || [];
+            inactivesByAllParents[ancestor.name].push(state);
+          });
+        });
+        return inactivesByAllParents;
       }
 
       // Given a state, returns all ancestor states which are sticky.
@@ -68,10 +93,11 @@ function $StickyStateProvider($stateProvider) {
       // it as a Exit/Enter, thus the special "updateStateParams" transition.
       // If a parent inactivated state has "updateStateParams" transition type, then
       // all descendant states must also be exit/entered, thus the first line of this function.
-      function getEnterTransition(state, stateParams, ancestorParamsChanged) {
+      function getEnterTransition(state, stateParams, reloadStateTree, ancestorParamsChanged) {
         if (ancestorParamsChanged) return "updateStateParams";
         var inactiveState = inactiveStates[state.self.name];
         if (!inactiveState) return "enter";
+        if (state.self === reloadStateTree) return "updateStateParams";
 //      if (inactiveState.locals == null || inactiveState.locals.globals == null) debugger;
         var paramsMatch = equalForKeys(stateParams, inactiveState.locals.globals.$stateParams, state.ownParams);
 //      if (DEBUG) $log.debug("getEnterTransition: " + state.name + (paramsMatch ? ": reactivate" : ": updateStateParams"));
@@ -89,6 +115,9 @@ function $StickyStateProvider($stateProvider) {
 
       // Duplicates logic in $state.transitionTo, primarily to find the pivot state (i.e., the "keep" value)
       function equalForKeys(a, b, keys) {
+        if (!angular.isArray(keys) && angular.isObject(keys)) {
+          keys = protoKeys(keys, ["$$keys", "$$values", "$$equals", "$$validates", "$$new", "$$parent"]);
+        }
         if (!keys) {
           keys = [];
           for (var n in a) keys.push(n); // Used instead of Object.keys() for IE8 compatibility
@@ -115,7 +144,11 @@ function $StickyStateProvider($stateProvider) {
         // Main API for $stickyState, used by $state.
         // Processes a potential transition, returns an object with the following attributes:
         // {
-        //    inactives: Array of all states which will be inactive if the transition is completed. (both previously and newly inactivated)
+        //    keep: The number of states being "kept"
+        //    inactives: Array of all states which will be inactive if the transition is completed.
+        //    reactivatingStates: Array of all states which will be reactivated if the transition is completed.
+        //    deepestReactivateChildren: Array of inactive children states of the toState, if the toState is being reactivated.
+        //        Note: Transitioning directly to an inactive state with inactive children will reactivate the state, but exit all the inactive children.
         //    enter: Enter transition type for all added states.  This is a sticky array to "toStates" array in $state.transitionTo.
         //    exit: Exit transition type for all removed states.  This is a sticky array to "fromStates" array in $state.transitionTo.
         // }
@@ -126,6 +159,7 @@ function $StickyStateProvider($stateProvider) {
             fromParams = transition.fromParams,
             toPath = transition.toState.path,
             toParams = transition.toParams,
+            reloadStateTree = transition.reloadStateTree,
             options = transition.options;
           var keep = 0, state = toPath[keep];
 
@@ -134,13 +168,32 @@ function $StickyStateProvider($stateProvider) {
           }
 
           while (state && state === fromPath[keep] && equalForKeys(toParams, fromParams, state.ownParams)) {
+            // We're "keeping" this state. bump keep var and get the next state in toPath for the next iteration.
             state = toPath[++keep];
           }
 
           result.keep = keep;
 
-          var idx, deepestUpdatedParams, deepestReactivate, reactivatedStatesByName = {}, pType = getStickyTransitionType(fromPath, toPath, keep);
-          var ancestorUpdated = false; // When ancestor params change, treat reactivation as exit/enter
+          var idx, deepestUpdatedParams, deepestReactivate, noLongerInactiveStates = {}, pType = getStickyTransitionType(fromPath, toPath, keep);
+          var ancestorUpdated = !!options.reload; // When ancestor params change, treat reactivation as exit/enter
+
+          var inactives = [], reactivatingStates = [], enteringStates = [], exitingStates = [];
+
+          // Calculate the "exit" transition for states not "kept", in fromPath.
+          // Exit transition can be one of:
+          //   exit: standard state exit logic
+          //   inactivate: register state as an inactive state
+          for (idx = keep; idx < fromPath.length; idx++) {
+            if (pType.from) {
+              // State is being inactivated, note this in result.inactives array
+              result.inactives.push(fromPath[idx]);
+              inactives.push(fromPath[idx]);
+              result.exit[idx] = "inactivate";
+            } else {
+              exitingStates.push(fromPath[idx]);
+              result.exit[idx] = "exit";
+            }
+          }
 
           // Calculate the "enter" transitions for new states in toPath
           // Enter transitions will be either "enter", "reactivate", or "updateStateParams" where
@@ -148,52 +201,53 @@ function $StickyStateProvider($stateProvider) {
           //   reactivate: use previous locals
           //   updateStateParams: like 'enter', except exit the inactive state before entering it.
           for (idx = keep; idx < toPath.length; idx++) {
-            var enterTrans = !pType.to ? "enter" : getEnterTransition(toPath[idx], transition.toParams, ancestorUpdated);
+            var enterTrans = !pType.to ? "enter" : getEnterTransition(toPath[idx], toParams, reloadStateTree, ancestorUpdated);
             ancestorUpdated = (ancestorUpdated || enterTrans == 'updateStateParams');
             result.enter[idx] = enterTrans;
             // If we're reactivating a state, make a note of it, so we can remove that state from the "inactive" list
-            if (enterTrans == 'reactivate')
-              deepestReactivate = reactivatedStatesByName[toPath[idx].name] = toPath[idx];
-            if (enterTrans == 'updateStateParams')
-              deepestUpdatedParams = toPath[idx];
-          }
-          deepestReactivate = deepestReactivate ? deepestReactivate.self.name + "." : "";
-          deepestUpdatedParams = deepestUpdatedParams ? deepestUpdatedParams.self.name + "." : "";
-
-          // Inactive states, before the transition is processed, mapped to the parent to the sticky state.
-          var inactivesByParent = mapInactives();
-
-          // root ("") is always kept. Find the remaining names of the kept path.
-          var keptStateNames = [""].concat(map(fromPath.slice(0, keep), function (state) {
-            return state.self.name;
-          }));
-
-          // Locate currently and newly inactive states (at pivot and above) and store them in the output array 'inactives'.
-          angular.forEach(keptStateNames, function (name) {
-            var inactiveChildren = inactivesByParent[name];
-            for (var i = 0; inactiveChildren && i < inactiveChildren.length; i++) {
-              var child = inactiveChildren[i];
-              // Don't organize state as inactive if we're about to reactivate it.
-              if (!reactivatedStatesByName[child.name] &&
-                (!deepestReactivate || (child.self.name.indexOf(deepestReactivate) !== 0)) &&
-                (!deepestUpdatedParams || (child.self.name.indexOf(deepestUpdatedParams) !== 0)))
-                result.inactives.push(child);
+            if (enterTrans == 'reactivate') {
+              reactivatingStates.push(toPath[idx]);
+              deepestReactivate = noLongerInactiveStates[toPath[idx].name] = toPath[idx];
+            } else if (enterTrans == 'updateStateParams') {
+              deepestUpdatedParams = noLongerInactiveStates[toPath[idx].name] = toPath[idx];
             }
+            enteringStates.push(toPath[idx]);
+          }
+
+          // Get the currently inactive states (before the transition is processed), mapped by parent state
+          var inactivesByAllParents = mapInactivesByImmediateParent();
+          
+          // If we are transitioning directly to an inactive state, and that state also has inactive children,
+          // then find those children so that they can be exited.
+          var deepestReactivateChildren = [];
+          if (deepestReactivate === transition.toState) {
+            deepestReactivateChildren = inactivesByAllParents[deepestReactivate.name] || [];
+          }
+          // Add them to the list of states being exited.
+          exitingStates = exitingStates.concat(deepestReactivateChildren);
+
+          // Find any other inactive children of any of the states being "exited"
+          var exitingChildren = map(exitingStates, function (state) {
+            return inactivesByAllParents[state.name] || [];
           });
 
-          // Calculate the "exit" transition for states not kept, in fromPath.
-          // Exit transition can be one of:
-          //   exit: standard state exit logic
-          //   inactivate: register state as an inactive state
-          for (idx = keep; idx < fromPath.length; idx++) {
-            var exitTrans = "exit";
-            if (pType.from) {
-              // State is being inactivated, note this in result.inactives array
-              result.inactives.push(fromPath[idx]);
-              exitTrans = "inactivate";
-            }
-            result.exit[idx] = exitTrans;
-          }
+          // append each array of children-of-exiting states to "exitingStates" because they will be exited too.
+          forEach(exitingChildren, function(children) {
+            exitingStates = exitingStates.concat(children);
+          });
+
+          // Now calculate the states that will be inactive if this transition succeeds.
+          // We have already pushed the transitionType == "inactivate" states to 'inactives'.
+          // Second, add all the existing inactive states
+          inactives = inactives.concat(map(inactiveStates, angular.identity));
+          // Finally, remove any states that are scheduled for "exit" or "enter", "reactivate", or "updateStateParams"
+          inactives = inactives.filter(function(state) {
+            return exitingStates.indexOf(state) === -1 && enteringStates.indexOf(state) === -1;
+          });
+
+          result.inactives = inactives;
+          result.reactivatingStates = reactivatingStates;
+          result.deepestReactivateChildren = deepestReactivateChildren;
 
           return result;
         },
@@ -236,6 +290,9 @@ function $StickyStateProvider($stateProvider) {
               if (DEBUG) $log.debug("Exiting " + name + " because it's a substate of " + exiting.name + " and wasn't found in ", exitingNames);
               if (inactiveExiting.self.onExit)
                 $injector.invoke(inactiveExiting.self.onExit, inactiveExiting.self, inactiveExiting.locals.globals);
+              angular.forEach(inactiveExiting.locals, function(localval, key) {
+                delete inactivePseudoState.locals[key];
+              });
               inactiveExiting.locals = null;
               inactiveExiting.self.status = 'exited';
               delete inactiveStates[name];
@@ -250,9 +307,9 @@ function $StickyStateProvider($stateProvider) {
         },
 
         // Removes a previously inactivated state from the inactive sticky state registry
-        stateEntering: function (entering, params, onEnter) {
+        stateEntering: function (entering, params, onEnter, updateParams) {
           var inactivatedState = getInactivatedState(entering);
-          if (inactivatedState && !getInactivatedState(entering, params)) {
+          if (inactivatedState && (updateParams || !getInactivatedState(entering, params))) {
             var savedLocals = entering.locals;
             this.stateExiting(inactivatedState);
             entering.locals = savedLocals;
@@ -261,6 +318,14 @@ function $StickyStateProvider($stateProvider) {
 
           if (onEnter)
             $injector.invoke(onEnter, entering.self, entering.locals.globals);
+        },
+        reset: function reset(inactiveState, params) {
+          var state = $state.get(inactiveState);
+          var exiting = getInactivatedState(state, params);
+          if (!exiting) return false;
+          stickySupport.stateExiting(exiting);
+          $rootScope.$broadcast("$viewContentLoading");
+          return true;
         }
       };
 
@@ -268,4 +333,4 @@ function $StickyStateProvider($stateProvider) {
     }];
 }
 
-angular.module("ct.ui.router.extras").provider("$stickyState", $StickyStateProvider);
+mod_sticky.provider("$stickyState", $StickyStateProvider);

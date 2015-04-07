@@ -1,3 +1,178 @@
+<a name="0.0.12"></a>
+### 0.0.13 (2015-02-02)
+
+This release comes 2 days after 0.0.12 and fixes a couple of bugs
+
+#### Bug Fixes
+
+* **future:** fix modular build of futurestates ([abfdc34d](https://github.com/christopherthielen/ui-router-extras/commit/abfdc34d41afea34ca8cccd3db5f81bb3a856eb4), closes [#151](https://github.com/christopherthielen/ui-router-extras/issues/151))
+* **statevis:** add dep from statevis to sticky ([1a488d84](https://github.com/christopherthielen/ui-router-extras/commit/1a488d84257060868f3c70b6ef7305f4936212eb), closes [#153](https://github.com/christopherthielen/ui-router-extras/issues/153))
+* **sticky:** Fix modular sticky states build ([21d1d129](https://github.com/christopherthielen/ui-router-extras/commit/21d1d129963b8bfc724823f93ca0efc32868ec77), closes [#154](https://github.com/christopherthielen/ui-router-extras/issues/154))
+* **transition:** transition promise now resolved correctly ([598452ed](https://github.com/christopherthielen/ui-router-extras/commit/598452ed5bae76b8add8707794740993d3242011), closes [#152](https://github.com/christopherthielen/ui-router-extras/issues/152))
+
+
+<a name="0.0.12"></a>
+### 0.0.12 (2015-01-31)
+
+<a href="https://github.com/christopherthielen/ui-router-extras/issues?q=milestone%3A0.0.12+">
+View issues tagged with 0.0.12
+</a>
+
+#### Bug Fixes
+
+* **$futureState:**
+  * Better logic for failed lazy load of future state chore($futureState): clean up  ([4f541906](https://github.com/christopherthielen/ui-router-extras/commit/4f541906a620c582ef33c5aab26d8259777ca70a))
+  * handle .otherwise() when the typed url matches a future state url + ".*" ([2bdf864e](https://github.com/christopherthielen/ui-router-extras/commit/2bdf864e7c9f8198614d8b24d327cd3599ce6711), closes [#124](https://github.com/christopherthielen/ui-router-extras/issues/124))
+  * Fixed url.concat to use parentState.url, or parentState.navigable.url. ([31ca73bd](https://github.com/christopherthielen/ui-router-extras/commit/31ca73bdc07ac80b53e9ec76f7f4eca268461fa2))
+* **$stickyState:** Made equalForKeys compatible with state.ownParams breaking change in UI-Router 0 ([5aba1345](https://github.com/christopherthielen/ui-router-extras/commit/5aba1345152f589d6cf913d26b5b00c6ee0f1884), closes [#112](https://github.com/christopherthielen/ui-router-extras/issues/112))
+* **dsr:** Allow default substates and parameters for deep state redirect. ([20fade74](https://github.com/christopherthielen/ui-router-extras/commit/20fade743e46bbb68158f251d0880905391ed806), closes [#150](https://github.com/christopherthielen/ui-router-extras/issues/150))
+* **previous:**
+  * Future states URL is now optional ([9233ea90](https://github.com/christopherthielen/ui-router-extras/commit/9233ea903bfeadfdd24039ea3ceb21359c1a9017), closes [#129](https://github.com/christopherthielen/ui-router-extras/issues/129))
+  * Previous state no longer tracks abstract from-states (e.g., root) ([b0431d68](https://github.com/christopherthielen/ui-router-extras/commit/b0431d6884d335208161be1e562d3682da168d9d), closes [#123](https://github.com/christopherthielen/ui-router-extras/issues/123))
+  * Previous state now tracked using $transition$ promise ([1127ef62](https://github.com/christopherthielen/ui-router-extras/commit/1127ef62274bc4561370bbc3da6a4d9b5ba1c6d4), closes [#120](https://github.com/christopherthielen/ui-router-extras/issues/120))
+* **sticky:**
+  * fixed reload: true for ui-router 0.2.8 ([82783374](https://github.com/christopherthielen/ui-router-extras/commit/82783374ae07b7b7f07b597a712fbc89a00ca457))
+  * Fixed unexpected exit/reload of inactive state. ([c8eff13d](https://github.com/christopherthielen/ui-router-extras/commit/c8eff13d32216070e743fe772325f8b81b959a17), closes [#131](https://github.com/christopherthielen/ui-router-extras/issues/131))
+  * fix sticky state registration ([d84311eb](https://github.com/christopherthielen/ui-router-extras/commit/d84311eb78d0da66911216b0250bc197619cd1d4))
+
+
+#### Features
+
+* **$futureState:** Added $stateAdded event ([b6da3998](https://github.com/christopherthielen/ui-router-extras/commit/b6da3998dc903eb54f4f74d6eabe776c63260a04))
+* **previous:** forget can now forget the previous state ([992b88bd](https://github.com/christopherthielen/ui-router-extras/commit/992b88bd2f716e4bd8637cc6429f7670bf0a5e88), closes [#145](https://github.com/christopherthielen/ui-router-extras/issues/145))
+* **sticky:** Allow reloading of partial state tree ([27d6c8c5](https://github.com/christopherthielen/ui-router-extras/commit/27d6c8c5adbf7ffff059d6e66b9ec1b0e4963408), closes [#139](https://github.com/christopherthielen/ui-router-extras/issues/139))
+* **uiRouterExtras:** modularize the code base and build system. switched to gulp ([aebf936d](https://github.com/christopherthielen/ui-router-extras/commit/aebf936db9cd4c7dc8f2b813f20572ba3b07bea6))
+
+
+<a name="0.0.11"></a>
+### 0.0.11 (2014-11-21)
+
+This release focuses on improvements to Future States.
+
+#### Bug Fixes
+
+* load  in lazyLoadState ((32fcf169))
+* **$futureState:**
+  * when concatting with parent url, use parent.navigable.url ((63ec61bf), closes (#69))
+  * fix top-level future states (root state is parent) ((e5847356), closes (#98))
+  * also register parent future states returned from factory fn ((48995fb3), closes (#99))
+  * fix transition to future state using .relative sref ((e953de61), closes (#3))
+  * unregister lazyloaded future states closes #2 ((67ad0d47))
+  * allow state lookup by object reference, or by state name ((6ca316cd))
+* **$stickyState:** Make sticky state compatible with UI-Router 0.2.12 ((751db8e1), closes (#88))
+* **ie:** added ['finally'] method invocation on ((095e5675))
+
+
+#### Features
+
+* **$futureState:** 
+  * use UrlMatcher for future url ((f1b0fe57), closes (#54), (#82))
+  * allow regexp matching in urlPrefix ((15c150d1))
+  * future states may now have parent futurestate ((8e11a7c6), closes (#63))
+  * support $urlRouterProvider.otherwise() ((748f2f1f))
+
+* **$previousState:** Add support for default previous state/params ((1c08ed7c))
+* **$stickyState:** Added $stickyState.reset() function ((af427116), closes (#48))
+* **$deepStateRedirect:** 
+  * add support for DSR only when params match. ((ed16ae4c))
+  * add service function to reset DSR ((c17e27f0), closes (#87))
+  * provide state dsr function with to and redirect info. ((c46fd283), closes (#91))
+
+
+#### Breaking Changes
+
+* use FutureState.name instead of FutureState.stateName to be consistent with UI-Router (backwards compat attempted, but not guaranteed)
+- BREAKING CHANGE: use FutureState.url instead of FutureState.urlPrefix to be consistent with UI-Router (backwards compat attempted, but not guaranteed)
+- FutureState.url is now processed using UI-Router's UrlMatcher code.
+- FutureState.url is concat'd with the parent state's url to create the UrlMatcher/regexp.
+- FutureState.url has a wildcard added to the end to match anything extra (.*)
+- Changed example iframe factory to use .name and .url and .parent
+- internalStates map now gets root internal state
+
+Fixes #54
+Closes #82 (PR)
+ ((f1b0fe57))
+
+
+<a name="0.0.11"></a>
+### 0.0.11 (2014-11-21)
+
+
+#### Bug Fixes
+
+* load  in lazyLoadState ((32fcf169))
+* **$deepStateRedirect:** provide state dsr function with to and redirect info. ((c46fd283), closes (#91))
+* **$futureState:**
+  * when concatting with parent url, use parent.navigable.url ((63ec61bf), closes (#69))
+  * fix top-level future states (root state is parent) ((e5847356), closes (#98))
+  * also register parent future states returned from factory fn ((48995fb3), closes (#99))
+* **ie:** added ['finally'] method invocation on ((095e5675))
+
+
+<a name="0.0.11"></a>
+### 0.0.11 (2014-11-03)
+
+
+#### Bug Fixes
+
+* allow regexp matching in urlPrefix ((15c150d1))
+* **$deepStateRedirect:**
+  * add service function to reset DSR ((c17e27f0), closes (#87))
+  * add support for DSR only when params match. ((ed16ae4c))
+* **$futureState:**
+  * future states may now have parent futurestate ((8e11a7c6), closes (#63))
+  * fix transition to future state using .relative sref ((e953de61), closes (#3))
+  * use UrlMatcher for future url ((f1b0fe57), closes (#54), (#82))
+  * support $urlRouterProvider.otherwise() ((748f2f1f))
+  * unregister lazyloaded future states closes #2 ((67ad0d47))
+  * allow state lookup by object reference, or by state name ((6ca316cd))
+* **$stickyState:**
+  * Added $stickyState.reset() function ((af427116), closes (#48))
+  * Make sticky state compatible with UI-Router 0.2.12 ((751db8e1), closes (#88))
+
+
+#### Features
+
+* **$previousState:** Add support for default previous state/params ((1c08ed7c))
+
+
+#### Breaking Changes
+
+* use FutureState.name instead of FutureState.stateName to be consistent with UI-Router (backwards compat attempted, but not guaranteed)
+* use FutureState.url instead of FutureState.urlPrefix to be consistent with UI-Router (backwards compat attempted, but not guaranteed)
+
+<a name="0.0.10"></a>
+### 0.0.10 (2014-08-27)
+
+#### Bug Fixes
+
+* Proper filename casing for case-sensitive filesystems #47 from theomy ((9b5a62b2))
+* **$stickyState:**
+  * Fix states not exiting when the state parent attribute is used ((a3f0f9db))
+
+(instead of the fully qualified dotted notation)
+  * Fixed the decorated $state.transitionTo promise result. ((873e9a79))
+
+When it should have been returning a rejected promise, it was instead returning a resolved promise with the error as the value. closes #42
+  * Made root.locals inherit from __inactives.locals. ((02c804c0))
+
+Removed resolve and globals from __inactives. closes #37
+  * Sticky States needs access to the root state. ((f3cf772c))
+
+It can now access it even if no user-defined states have been decorated. closes #36
+  * Proper filename casing for case-sensitive filesystems - renamed stickystate.js to stickyState.js
+
+#### Features
+* **DSR:**
+  * state.deepStateRedirect may now be a function. closes #44 ((d37442e))
+* **$transition$:** 
+  * new injectable promise object $transition$ ... docs pending
+
+#### Other
+  * Add injection annotations so other people can minify correctly.  closes #38 ((68105836))
+  * Reformatted code
+
+
 # 0.0.9
 ## Features
 

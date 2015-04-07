@@ -44,6 +44,8 @@ angular.module('ngMock').config(function ($provide) {
   });
 });
 
+var tLog, tExpected;
+
 function testablePromise(promise) {
   if (!promise || !promise.then) throw new Error('Expected a promise, but got ' + jasmine.pp(promise) + '.');
   if (!angular.isDefined(promise.$$resolved)) throw new Error('Promise has not been augmented by ngMock');
@@ -97,10 +99,18 @@ function addCallbacks (basicStates) {
 //      console.log(cause  + ":  Registered Inactive view " + views + " for state " + state.name + ": ", tLog.views);
     }
 
-    state.onInactivate = function () { tLog.inactivated.push(state.name); registerView(state,  'Inactivate');};
-    state.onReactivate = function () { tLog.reactivated.push(state.name); deregisterView(state,'Reactivate');};
-    state.onEnter =      function () { tLog.entered.push(state.name);     deregisterView(state,'Enter     ');};
-    state.onExit =       function () { tLog.exited.push(state.name);      deregisterView(state,'Exit      ');};
+    state.onInactivate = function () {
+      tLog.inactivated.push(state.name); registerView(state,  'Inactivate');
+    };
+    state.onReactivate = function () {
+      tLog.reactivated.push(state.name); deregisterView(state,'Reactivate');
+    };
+    state.onEnter = function () {
+      tLog.entered.push(state.name);     deregisterView(state,'Enter     ');
+    };
+    state.onExit = function () {
+      tLog.exited.push(state.name);      deregisterView(state,'Exit      ');
+    };
   });
 }
 
@@ -127,8 +137,32 @@ function pathFrom(start, end) {
   return path;
 }
 
+/**
+ * This test function does the following:
+ * - Go to a state `state`.
+ * - Flush transition
+ * - Expect the current state to be the target state, or the expected redirect state
+ * - analyse the transition log and expect
+ *   - The entered states to match tAdditional.entered
+ *   - The exited states to match tAdditional.exited
+ *   - The inactivated states to match tAdditional.inactivated
+ *   - The reactivated states to match tAdditional.reactivated
+ * - Expect the active+inactive states to match the active+inactive views
+ *
+ * @param state: The target state
+ * @param tAdditional: An object with the expected transitions
+ *    {
+ *      entered:      statename or [ statenamearray ],
+ *      exited:       statename or [ statenamearray ],
+ *      inactivated:  statename or [ statenamearray ],
+ *      reactivated:  statename or [ statenamearray ]
+ *    }
+ *    note: statenamearray may be built using the pathFrom helper function
+ * @param options: options which modify the expected transition behavior
+ *    { redirect: redirectstatename }
+ */
 function testGo(state, tAdditional, options) {
-  $state.go(state);
+  $state.go(state, options && options.params, options);
   $q.flush();
   var expectRedirect = options && options.redirect;
   if (!expectRedirect)
@@ -138,13 +172,17 @@ function testGo(state, tAdditional, options) {
 
   var root = $state.$current.path[0].parent;
   var __inactives = root.parent;
-  var __inactiveViews = _.keys(__inactives.locals);
-  var extra = _.difference(__inactiveViews, tLog.views);
-  var missing = _.difference(tLog.views, __inactiveViews);
-  
-  expect("Extra Views: " + extra).toEqual("Extra Views: " + []);
-  expect("Missing Views: " + missing).toEqual("Missing Views: " + []);
-  
+
+  // If ct.ui.router.extras.sticky module is included, then root.parent holds the inactive states/views
+  if (__inactives) {
+    var __inactiveViews = _.keys(__inactives.locals);
+    var extra = _.difference(__inactiveViews, tLog.views);
+    var missing = _.difference(tLog.views, __inactiveViews);
+
+    expect("Extra Views: " + extra).toEqual("Extra Views: " + []);
+    expect("Missing Views: " + missing).toEqual("Missing Views: " + []);
+  }
+
   if (tExpected && tAdditional) {
     // append all arrays in tAdditional to arrays in tExpected
     angular.forEach(tAdditional, function (value, key) {
@@ -168,4 +206,9 @@ function uiRouterVersion() {
   if (!found) return undefined;
 
   return (parseInt(found[1]) * 1000) + (parseInt(found[2]) * 100) + parseInt(found[3]);
+}
+
+function resetTransitionLog() {
+  tLog = new TransitionAudit();
+  tExpected = new TransitionAudit();
 }

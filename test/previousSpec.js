@@ -8,24 +8,24 @@ function getPreviousMockStates() {
   states.push({ name: 'aside2', url: '/aside2'});
 
   // Root of main app states
-  states.push({ name: 'top', url: '/', deepStateRedirect: true });
+  states.push({ name: 'top', url: '/' });
 
   // Personnel tab
-  states.push({ name: 'top.people', url: 'people', deepStateRedirect: true });
+  states.push({ name: 'top.people', url: 'people'  });
   states.push({ name: 'top.people.managerlist', url: '/managers'});
   states.push({ name: 'top.people.manager', url: '/manager/:mid'});
   states.push({ name: 'top.people.manager.emplist', url: '/emps'});
   states.push({ name: 'top.people.manager.emp', url: '/emp/:eid'});
 
   // Inventory tab
-  states.push({ name: 'top.inv', url: 'inv', deepStateRedirect: true });
+  states.push({ name: 'top.inv', url: 'inv' });
   states.push({ name: 'top.inv.storelist', url: '/stores'});
   states.push({ name: 'top.inv.store', url: '/store/:sid'});
   states.push({ name: 'top.inv.store.productlist', url: '/products'});
   states.push({ name: 'top.inv.store.product', url: '/product/:pid'});
 
   // Customer tab
-  states.push({ name: 'top.cust', url: 'cust', deepStateRedirect: true });
+  states.push({ name: 'top.cust', url: 'cust' });
   states.push({ name: 'top.cust.customerlist', url: '/customers'});
   states.push({ name: 'top.cust.customer', url: '/customer/:cid'});
   states.push({ name: 'top.cust.customer.orderlist', url: '/orders'});
@@ -35,7 +35,7 @@ function getPreviousMockStates() {
 }
 
 describe("$previousState", function () {
-  beforeEach(module('ct.ui.router.extras', function ($stateProvider, $urlRouterProvider) {
+  beforeEach(module('ct.ui.router.extras.previous', function ($stateProvider, $urlRouterProvider) {
     $urlRouterProvider.otherwise("/");
     var mockStates = getPreviousMockStates();
     addCallbacks(mockStates);
@@ -53,14 +53,36 @@ describe("$previousState", function () {
     $previousState = $get('$previousState');
   }));
 
+  // Test for #123
+  it("should not capture root state (or non-navigable states)", inject(function($rootScope) {
+    testGo("top", { entered: 'top' });
+    expect($previousState.get()).toBeNull();
+  }));
+
+
   describe('.go()', function () {
     it("should transition back to the previous state", function () {
       testGo("top.people.managerlist", { entered: pathFrom('top', 'top.people.managerlist') });
-      testGo("top.inv.storelist", { entered: pathFrom('top.inv', 'top.inv.storelist') , exited: pathFrom('top.people.managerlist', 'top.people') });
+      testGo("top.inv.storelist", { entered: pathFrom('top.inv', 'top.inv.storelist'), exited: pathFrom('top.people.managerlist', 'top.people') });
       $previousState.go();
       $q.flush();
       expect($state.current.name === "tabs.tabs2");
     });
+  });
+
+  describe('.get()', function() {
+    // Test for #120
+    it("should not return current state, after a transition is cancelled", inject(function($rootScope) {
+      testGo("top", { entered: 'top' });
+      testGo("top.people.managerlist", { entered: ['top.people', 'top.people.managerlist'] });
+
+      var transitionNum = 0;
+      $rootScope.$on("$stateChangeStart", function(evt) { if (transitionNum++ === 0) { evt.preventDefault(); } });
+
+      testGo("top.inv.storelist", undefined, { redirect: 'top.people.managerlist'}); // Cancelled, so we're still at original state
+
+      expect($previousState.get().state.name).toBe("top");
+    }))
   });
   
   describe('.memo()', function () {
@@ -97,11 +119,40 @@ describe("$previousState", function () {
       testGo("top.inv");
       testGo("top.inv.storelist");
       $previousState.memo('foo');
-      testGo('top.people', null, { redirect: 'top.people.managerlist'});
+      testGo('top.people.managerlist');
       $previousState.memo('foo');
-      testGo("top.inv", null, { redirect: 'top.inv.storelist'});
+      testGo("top.inv.storelist");
       $previousState.go('foo'); // triggers issue #16
       expect($state.current).toBe($state.get('top.inv.storelist'))
+    });
+
+    it("should return to 'top.people.managerList' with memoName 'foo'", function() {
+      $previousState.memo('foo', 'top.people.managerList');
+      expect($previousState.get('foo').state).toBe($state.get('top.people.managerList'));
+    });
+
+    it("should return to 'top.people.managerList' with parameter 'id' equal to 5 with memoName 'foo'", function() {
+      $previousState.memo('foo', 'top.people.managerList', { id: 5 });
+      expect($previousState.get('foo').state).toBe($state.get('top.people.managerList'));
+      expect($previousState.get('foo').params).toEqual({ id: 5 });
+    });
+  });
+
+  describe('.forget()', function () {
+    it("should forget previous state", function () {
+      testGo("top.people.managerlist", { entered: pathFrom('top', 'top.people.managerlist') });
+      testGo("top.inv.storelist", { entered: pathFrom('top.inv', 'top.inv.storelist'), exited: pathFrom('top.people.managerlist', 'top.people') });
+      $previousState.forget();
+      expect($previousState.get()).toBeFalsy();
+    });
+
+    it("should forget previous state for specific memo", function () {
+      testGo("top.people.managerlist", { entered: pathFrom('top', 'top.people.managerlist') });
+      testGo("top.inv.storelist", { entered: pathFrom('top.inv', 'top.inv.storelist'), exited: pathFrom('top.people.managerlist', 'top.people') });
+      $previousState.memo('foo');
+      expect($previousState.get('foo').state.name).toBe("top.people.managerlist");
+      $previousState.forget('foo');
+      expect($previousState.get('foo')).toBeFalsy();
     });
   });
 });

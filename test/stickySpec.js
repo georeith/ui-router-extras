@@ -1,11 +1,5 @@
 "use strict";
 var $get, $state, $stickyState, $compile, $rootScope, $q, _stickyStateProvider, _stateProvider;
-var tLog, tExpected;
-
-function resetTransitionLog() {
-  tLog = new TransitionAudit();
-  tExpected = new TransitionAudit();
-}
 
 function ssReset(newStates, $stateProvider) {
   resetTransitionLog();
@@ -26,6 +20,7 @@ describe('stickyState', function () {
     newStates['A'] = { template: '<div ui-view="_1"></div><div ui-view="_2"></div><div ui-view="_3"></div>'};
     newStates['A._1'] = {sticky: true, views: { '_1@A': {} } };
     newStates['A._2'] = {sticky: true, views: { '_2@A': {} } };
+    newStates['A._2.__1'] = { };
     newStates['A._3'] = {
       sticky: true,
       views: { '_3@A': { controller: function ($scope, X) {
@@ -36,7 +31,7 @@ describe('stickyState', function () {
     return newStates;
   }
 
-  beforeEach(module('ct.ui.router.extras', function ($stateProvider, $stickyStateProvider) {
+  beforeEach(module('ct.ui.router.extras.sticky', function ($stateProvider, $stickyStateProvider) {
     _stateProvider = $stateProvider;
     _stickyStateProvider = $stickyStateProvider;
   }));
@@ -240,6 +235,38 @@ describe('stickyState', function () {
     });
   });
 
+  function getParameterizedStates() {
+    return {
+      'main': {},
+      'main.other': { sticky: true, views: { 'other@main': {} } },
+      'main.product': { sticky: true, views: { 'product@main': {} }, url: '/:product_id' },
+      'main.product.something': {}
+    };
+  }
+
+  describe('with params in sticky state', function() {
+    beforeEach(function() {
+      ssReset(getParameterizedStates(), _stateProvider);
+    });
+
+    it("should reload when params change", function() {
+      testGo('main');
+      var options = { params: { 'product_id': 12345 } };
+      testGo('main.product.something', { entered: pathFrom('main', 'main.product.something') }, options);
+      testGo('main.other', { entered: 'main.other', inactivated: [ 'main.product.something', 'main.product'] });
+      testGo('main.product.something', { reactivated: ['main.product', 'main.product.something'], inactivated: 'main.other' }, options);
+      _stickyStateProvider.enableDebug(true);
+      testGo('main.other', { reactivated: 'main.other', inactivated: [ 'main.product.something', 'main.product'] });
+      options.params.product_id = 54321;
+      resetTransitionLog();
+      testGo('main.product.something', {
+        exited: ['main.product.something', 'main.product'],
+        entered: ['main.product', 'main.product.something'],
+        inactivated: 'main.other' }, options);
+      _stickyStateProvider.enableDebug(false);
+    });
+  });
+
   describe('nested sticky .go() transitions', function () {
     beforeEach(function() {
       ssReset(getNestedStickyStates(), _stateProvider);
@@ -252,10 +279,12 @@ describe('stickyState', function () {
 
       newStates['A._1'] = {sticky: true, deepStateRedirect: true, views: { '_1@A': {} }};
       newStates['A._2'] = {sticky: true, deepStateRedirect: true, views: { '_2@A': {} }};
-      newStates['A._3'] = {sticky: true, deepStateRedirect: true, views: { '_3@A': {} }};
+      newStates['A._3'] = {sticky: true, views: { '_3@A': {} }};
 
       newStates['A._1.__1'] = {};
       newStates['A._2.__2'] = {};
+      newStates['A._3.__1'] = { views: { '__1@A._3': {} } };
+      newStates['A._3.__2'] = { views: { '__2@A._3': {} } };
 
       newStates['A._1.__1.B'] = {};
       newStates['A._1.__1.B.___1'] = {sticky: true, views: { '___1@A._1.__1.B': {} }};
@@ -271,15 +300,33 @@ describe('stickyState', function () {
       testGo('A._1.__1.B.___2', { inactivated: ['A._1.__1.B.___1'], entered:     ['A._1.__1.B.___2'] });
     });
 
-    it ('should reactivate child-of-sticky state ___1 when transitioning back to A', function () {
+    it ('should reactivate child-of-sticky state ___1 when transitioning back to A._1.__1', function () {
       testGo('aside', { entered: ['aside']});
       testGo('A._1.__1', { exited: ['aside'],                         entered: pathFrom('A', 'A._1.__1') });
       testGo('A._2.__2', { inactivated: pathFrom('A._1.__1', 'A._1'), entered: pathFrom('A._2', 'A._2.__2') });
       testGo('aside',    { inactivated: pathFrom('A._2.__2', 'A') ,   entered: ['aside'] });
-      testGo('A._2', { exited: ['aside'],                             reactivated: pathFrom('A', 'A._2.__2') }, { redirect: 'A._2.__2' });
+      testGo('A._2.__2', { exited: ['aside'],                         reactivated: pathFrom('A', 'A._2.__2') }, { redirect: 'A._2.__2' });
       resetTransitionLog();
-      testGo('A._1', { inactivated: pathFrom('A._2.__2', 'A._2'), reactivated: pathFrom('A._1', 'A._1.__1') }, { redirect: 'A._1.__1' });
+      testGo('A._1.__1', { inactivated: pathFrom('A._2.__2', 'A._2'), reactivated: pathFrom('A._1', 'A._1.__1') }, { redirect: 'A._1.__1' });
     });
+
+
+    describe("to an inactive state with inactive children", function() {
+      it("should exit inactive child states", function () {
+        testGo('A._3.__1', { entered: pathFrom('A', 'A._3.__1') });
+        testGo('A._2', { inactivated: pathFrom('A._3.__1', 'A._3'), entered: "A._2" });
+        testGo('A._3', { reactivated: "A._3", inactivated: "A._2", exited: "A._3.__1" });
+      });
+    });
+
+    describe("to an exited substate of an inactive state with inactive children", function() {
+      // Test for issue #131
+      it("should not exit inactive child states", function() {
+        testGo('A._3.__1', { entered: pathFrom('A', 'A._3.__1') });
+        testGo('A._2', { inactivated: pathFrom('A._3.__1', 'A._3'), entered: "A._2" });
+        testGo('A._3.__2', { reactivated: "A._3", inactivated: "A._2", entered: "A._3.__2" });
+      });
+    })
   });
 
   describe('nested .go() transitions with parent attributes', function () {
@@ -334,16 +381,55 @@ describe('stickyState', function () {
     });
 
     it ('should set transition attributes correctly', function() {
-      resetTransitionLog();
-
       // Test some transitions
       testGo('aside', { entered: ['aside'] });
       testGo('_2', { exited: ['aside'],  entered: ['A', '_2'] });
       testGo('__2', { entered: ['__2'] });
       testGo('A._1.__1', { inactivated: ['__2', '_2'], entered: ['A._1', 'A._1.__1'] });
-      testGo('_2', { reactivated: ['_2'], inactivated: ['A._1.__1', 'A._1'] });
+//      resetTransitionLog();
+      testGo('_2', { reactivated: ['_2'], inactivated: ['A._1.__1', 'A._1'], exited: '__2' });
       testGo('A', { inactivated: ['_2'] });
-      testGo('aside', { exited: ['__2', 'A._1.__1', 'A._1', '_2', 'A'], entered: ['aside'] });
+      testGo('aside', { exited: ['A._1.__1', 'A._1', '_2', 'A'], entered: ['aside'] });
+    });
+  });
+
+  // test cases for issue #139
+  describe('ui-router option reload: true', function() {
+    beforeEach(function() {
+      ssReset(getSimpleStates(), _stateProvider);
+    });
+
+    it('should be respected', function() {
+      testGo('A._1', { entered: ['A', 'A._1' ] });
+      testGo('A._2', { inactivated: [ 'A._1' ],  entered: 'A._2' });
+      testGo('A._1', { reactivated: 'A._1', inactivated: 'A._2' });
+//      resetTransitionLog();
+      testGo('A._2', { exited: [ 'A._1', 'A._2', 'A' ], entered: [ 'A', 'A._2' ] }, { reload: true });
+    });
+  });
+
+  describe('ui-router option reload: [state ref]', function() {
+    beforeEach(function() {
+      ssReset(getSimpleStates(), _stateProvider);
+    });
+
+    it('should reload a partial tree of sticky states', function() {
+      testGo('A._1', { entered: ['A', 'A._1' ] });
+      testGo('A._2', { inactivated: [ 'A._1' ],  entered: 'A._2' });
+      testGo('A._1', { reactivated: 'A._1', inactivated: 'A._2' });
+//      resetTransitionLog();
+      testGo('A._2', { inactivated: 'A._1', exited: 'A._2', entered: 'A._2' }, { reload: "A._2" });
+    });
+
+    it('should reload a partial tree of non-sticky states', function() {
+      testGo('A._1', { entered: ['A', 'A._1' ] });
+      testGo('A._2.__1', { inactivated: 'A._1', entered: [ 'A._2', 'A._2.__1' ] });
+      testGo('A._1', { reactivated: 'A._1', inactivated: [ 'A._2.__1', 'A._2' ] });
+      testGo('A._2.__1', {
+        inactivated: 'A._1', reactivated: 'A._2',
+        exited: [ 'A._2.__1' ], entered: [ 'A._2.__1' ]
+      }, { reload: "A._2.__1" });
+      testGo('A._2.__1', { exited: [ 'A._2.__1' ], entered: [ 'A._2.__1' ] }, { reload: "A._2.__1" });
     });
   });
 });
@@ -351,7 +437,7 @@ describe('stickyState', function () {
 describe('stickyState+ui-sref-active', function () {
   var document;
 
-  beforeEach(module('ct.ui.router.extras', function($stickyStateProvider, $stateProvider) {
+  beforeEach(module('ct.ui.router.extras.sticky', function($stickyStateProvider, $stateProvider) {
     // Load and capture $stickyStateProvider and $stateProvider
     _stickyStateProvider = $stickyStateProvider;
     _stateProvider = $stateProvider;

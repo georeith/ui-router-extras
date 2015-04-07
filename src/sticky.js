@@ -61,7 +61,11 @@ var internalStates = {}; // Map { statename -> InternalStateObj } holds internal
 var root, // Root state, internal representation
   pendingTransitions = [], // One transition may supersede another.  This holds references to all pending transitions
   pendingRestore, // The restore function from the superseded transition
-  inactivePseudoState; // This pseudo state holds all the inactive states' locals (resolved state data, such as views etc)
+  inactivePseudoState, // This pseudo state holds all the inactive states' locals (resolved state data, such as views etc)
+  reactivatingLocals = { }, // This is a prent locals to the inactivePseudoState locals, used to hold locals for states being reactivated
+  versionHeuristics = { // Heuristics used to guess the current UI-Router Version
+    hasParamSet: false
+  };
 
 // Creates a blank surrogate state
 function SurrogateState(type) {
@@ -73,42 +77,39 @@ function SurrogateState(type) {
     views: { },
     self: { },
     params: { },
-    ownParams: [],
+    ownParams: ( versionHeuristics.hasParamSet ? { $$equals: function() { return true; } } : []),
     surrogateType: type
   };
 }
 
 // ------------------------ Sticky State registration and initialization code ----------------------------------
 // Grab a copy of the $stickyState service for use by the transition management code
-angular.module("ct.ui.router.extras").run(["$stickyState", function ($stickyState) {
+angular.module("ct.ui.router.extras.sticky").run(["$stickyState", function ($stickyState) {
   _StickyState = $stickyState;
 }]);
 
-angular.module("ct.ui.router.extras").config(
-  [ "$provide", "$stateProvider", '$stickyStateProvider',
-    function ($provide, $stateProvider, $stickyStateProvider) {
+angular.module("ct.ui.router.extras.sticky").config(
+  [ "$provide", "$stateProvider", '$stickyStateProvider', '$urlMatcherFactoryProvider', 'uirextras_coreProvider',
+    function ($provide, $stateProvider, $stickyStateProvider, $urlMatcherFactoryProvider, uirextras_coreProvider) {
+      var core = uirextras_coreProvider;
+      var internalStates = core.internalStates;
+      var inherit = core.inherit;
+      var inheritParams = core.inheritParams;
+      var map = core.map;
+      var filterObj = core.filterObj;
+
+      versionHeuristics.hasParamSet = !!$urlMatcherFactoryProvider.ParamSet;
       // inactivePseudoState (__inactives) holds all the inactive locals which includes resolved states data, i.e., views, scope, etc
       inactivePseudoState = angular.extend(new SurrogateState("__inactives"), { self: {  name: '__inactives'  } });
       // Reset other module scoped variables.  This is to primarily to flush any previous state during karma runs.
       root = pendingRestore = undefined;
       pendingTransitions = [];
 
-      // Decorate any state attribute in order to get access to the internal state representation.
-      $stateProvider.decorator('parent', function (state, parentFn) {
-        // Capture each internal UI-Router state representations as opposed to the user-defined state object.
-        // The internal state is, e.g., the state returned by $state.$current as opposed to $state.current
-        internalStates[state.self.name] = state;
-        // Add an accessor for the internal state from the user defined state
-        state.self.$$state = function () {
-          return internalStates[state.self.name];
-        };
-
+      uirextras_coreProvider.onStateRegistered(function(state) {
         // Register the ones marked as "sticky"
         if (state.self.sticky === true) {
           $stickyStateProvider.registerStickyState(state.self);
         }
-
-        return parentFn(state);
       });
 
       var $state_transitionTo; // internal reference to the real $state.transitionTo function
@@ -116,8 +117,13 @@ angular.module("ct.ui.router.extras").config(
       $provide.decorator("$state", ['$delegate', '$log', '$q', function ($state, $log, $q) {
         // Note: this code gets run only on the first state that is decorated
         root = $state.$current;
+        internalStates[""] = root;
         root.parent = inactivePseudoState; // Make inactivePsuedoState the parent of root.  "wat"
         inactivePseudoState.parent = undefined; // Make inactivePsuedoState the real root.
+        // Add another locals bucket, as a parent to inactivatePseudoState locals.
+        // This is for temporary storage of locals of states being reactivated while a transition is pending
+        // This is necessary in some cases where $viewContentLoading is triggered before the $state.$current is updated to the toState.
+        inactivePseudoState.locals = inherit(reactivatingLocals, inactivePseudoState.locals);
         root.locals = inherit(inactivePseudoState.locals, root.locals); // make root locals extend the __inactives locals.
         delete inactivePseudoState.locals.globals;
 
@@ -126,6 +132,7 @@ angular.module("ct.ui.router.extras").config(
 
         // ------------------------ Decorated transitionTo implementation begins here ---------------------------
         $state.transitionTo = function (to, toParams, options) {
+          var DEBUG = $stickyStateProvider.debugMode();
           // TODO: Move this to module.run?
           // TODO: I'd rather have root.locals prototypally inherit from inactivePseudoState.locals
           // Link root.locals and inactives.locals.  Do this at runtime, after root.locals has been set.
@@ -144,6 +151,8 @@ angular.module("ct.ui.router.extras").config(
           var toStateSelf = $state.get(to, rel); // exposes findState relative path functionality, returns state.self
           var savedToStatePath, savedFromStatePath, stickyTransitions;
           var reactivated = [], exited = [], terminalReactivatedState;
+          toParams = toParams || {};
+          arguments[1] = toParams;
 
           var noop = function () {
           };
@@ -238,6 +247,19 @@ angular.module("ct.ui.router.extras").config(
             return state;
           }
 
+          // TODO: This may be completely unnecessary now that we're using $$uirouterextrasreload temp param
+          function stateUpdateParamsSurrogate(state, toParams) {
+            var oldOnEnter = state.self.onEnter;
+            state.self.onEnter = function () {
+              _StickyState.stateEntering(state, toParams, oldOnEnter, true);
+            };
+            restore.addRestoreFunction(function () {
+              state.self.onEnter = oldOnEnter;
+            });
+
+            return state;
+          }
+
           function stateExitedSurrogate(state) {
             var oldOnExit = state.self.onExit;
             state.self.onExit = function () {
@@ -259,10 +281,50 @@ angular.module("ct.ui.router.extras").config(
               savedToStatePath = toState.path;
               savedFromStatePath = fromState.path;
 
-              var currentTransition = {toState: toState, toParams: toParams || {}, fromState: fromState, fromParams: fromParams || {}, options: options};
+              // Try to resolve options.reload to a state.  If so, we'll reload only up to the given state.
+              var reload = options && options.reload || false;
+              var reloadStateTree = reload && (reload === true ? savedToStatePath[0].self : $state.get(reload, rel));
+              // If options.reload is a string or a state, we want to handle reload ourselves and not
+              // let ui-router reload the entire toPath.
+              if (options && reload && reload !== true)
+                delete options.reload;
+
+              var currentTransition = {
+                toState: toState,
+                toParams: toParams || {},
+                fromState: fromState,
+                fromParams: fromParams || {},
+                options: options,
+                reloadStateTree: reloadStateTree
+              };
 
               pendingTransitions.push(currentTransition); // TODO: See if a list of pending transitions is necessary.
               pendingRestore = restore;
+
+              // If we're reloading from a state and below, temporarily add a param to the top of the state tree
+              // being reloaded, and add a param value to the transition.  This will cause the "has params changed
+              // for state" check to return true, and the states will be reloaded.
+              if (reloadStateTree) {
+                currentTransition.toParams.$$uirouterextrasreload = Math.random();
+                var params = reloadStateTree.$$state().params;
+                var ownParams = reloadStateTree.$$state().ownParams;
+
+                if (versionHeuristics.hasParamSet) {
+                  var tempParam = new $urlMatcherFactoryProvider.Param('$$uirouterextrasreload');
+                  params.$$uirouterextrasreload = ownParams.$$uirouterextrasreload = tempParam;
+                  restore.restoreFunctions.push(function() {
+                    delete params.$$uirouterextrasreload;
+                    delete ownParams.$$uirouterextrasreload;
+                  });
+                } else {
+                  params.push('$$uirouterextrasreload');
+                  ownParams.push('$$uirouterextrasreload');
+                  restore.restoreFunctions.push(function() {
+                    params.length = params.length -1;
+                    ownParams.length = ownParams.length -1;
+                  });
+                }
+              }
 
               // $StickyStateProvider.processTransition analyzes the states involved in the pending transition.  It
               // returns an object that tells us:
@@ -283,42 +345,67 @@ angular.module("ct.ui.router.extras").config(
                 if (name.indexOf("@") != -1) delete inactivePseudoState.locals[name];
               });
 
-              // Find all states that will be inactive once the transition succeeds.  For each of those states,
-              // place its view-locals on the __inactives pseudostate's .locals.  This allows the ui-view directive
-              // to access them and render the inactive views.
-              for (var i = 0; i < stickyTransitions.inactives.length; i++) {
-                var iLocals = stickyTransitions.inactives[i].locals;
-                angular.forEach(iLocals, function (view, name) {
-                  if (iLocals.hasOwnProperty(name) && name.indexOf("@") != -1) { // Only grab this state's "view" locals
-                    inactivePseudoState.locals[name] = view; // Add all inactive views not already included.
+              var saveViewsToLocals = function (targetObj) {
+                return function(view, name) {
+                  if (name.indexOf("@") !== -1) { // Only grab this state's "view" locals
+                    targetObj[name] = view; // Add all inactive views not already included.
                   }
-                });
-              }
+                }
+              };
+
+              // For each state that will be inactive when the transition is complete, place its view-locals on the
+              // __inactives pseudostate's .locals.  This allows the ui-view directive to access them and
+              // render the inactive views.
+              forEach(stickyTransitions.inactives, function(state) {
+                forEach(state.locals, saveViewsToLocals(inactivePseudoState.locals))
+              });
+
+              // For each state that will be reactivated during the transition, place its view-locals on a separate
+              // locals object (prototypal parent of __inactives.locals, and remove them when the transition is complete.
+              // This is necessary when we a transition will reactivate one state, but enter a second.
+              // Gory details:
+              //   - the entering of a new state causes $view.load() to fire $viewContentLoading while the transition is
+              //     still in process
+              //   - all ui-view(s) check if they should re-render themselves in response to this event.
+              //   - ui-view checks if previousLocals is equal to currentLocals
+              //     - it uses $state.$current.locals[myViewName] for previousLocals
+              //   - Because the transition is not completed, $state.$current is set to the from state, and
+              //     the ui-view for a reactivated state cannot find its previous locals.
+              forEach(stickyTransitions.reactivatingStates, function(state) {
+                forEach(state.locals, saveViewsToLocals(reactivatingLocals));
+              });
+
+              // When the transition is complete, remove the copies of the view locals from reactivatingLocals.
+              restore.addRestoreFunction(function clearReactivatingLocals() {
+                forEach(reactivatingLocals, function (val, viewname) {
+                  delete reactivatingLocals[viewname];
+                })
+              });
 
               // Find all the states the transition will be entering.  For each entered state, check entered-state-transition-type
               // Depending on the entered-state transition type, place the proper surrogate state on the surrogate toPath.
               angular.forEach(stickyTransitions.enter, function (value, idx) {
                 var surrogate;
+                var enteringState = toState.path[idx];
                 if (value === "reactivate") {
                   // Reactivated states require TWO surrogates.  The "phase 1 reactivated surrogates" are added to both
                   // to.path and from.path, and as such, are considered to be "kept" by UI-Router.
                   // This is required to get UI-Router to add the surrogate locals to the protoypal locals object
-                  surrogate = stateReactivatedSurrogatePhase1(toState.path[idx]);
+                  surrogate = stateReactivatedSurrogatePhase1(enteringState);
                   surrogateToPath.push(surrogate);
                   surrogateFromPath.push(surrogate);  // so toPath[i] === fromPath[i]
 
                   // The "phase 2 reactivated surrogate" is added to the END of the .path, after all the phase 1
                   // surrogates have been added.
-                  reactivated.push(stateReactivatedSurrogatePhase2(toState.path[idx]));
-                  terminalReactivatedState = surrogate;
+                  reactivated.push(stateReactivatedSurrogatePhase2(enteringState));
+                  terminalReactivatedState = enteringState;
                 } else if (value === "updateStateParams") {
                   // If the state params have been changed, we need to exit any inactive states and re-enter them.
-                  surrogate = stateEnteredSurrogate(toState.path[idx]);
-                  surrogateToPath.push(surrogate);
-                  terminalReactivatedState = surrogate;
+                  surrogateToPath.push(stateUpdateParamsSurrogate(enteringState));
+                  terminalReactivatedState = enteringState;
                 } else if (value === "enter") {
                   // Standard enter transition.  We still wrap it in a surrogate.
-                  surrogateToPath.push(stateEnteredSurrogate(toState.path[idx]));
+                  surrogateToPath.push(stateEnteredSurrogate(enteringState));
                 }
               });
 
@@ -335,7 +422,7 @@ angular.module("ct.ui.router.extras").config(
                 }
               });
 
-              // Add surrogate for reactivated to ToPath again, this time without a matching FromPath entry
+              // Add surrogate states for reactivated to ToPath again (phase 2), this time without a matching FromPath entry
               // This is to get ui-router to call the surrogate's onEnter callback.
               if (reactivated.length) {
                 angular.forEach(reactivated, function (surrogate) {
@@ -343,29 +430,18 @@ angular.module("ct.ui.router.extras").config(
                 });
               }
 
-              // In some cases, we may be some state, but not its children states.  If that's the case, we have to
-              // exit all the children of the deepest reactivated state.
-              if (terminalReactivatedState) {
-                var prefix = terminalReactivatedState.self.name + ".";
-                var inactiveStates = _StickyState.getInactiveStates();
-                var inactiveOrphans = [];
-                inactiveStates.forEach(function (exiting) {
-                  if (exiting.self.name.indexOf(prefix) === 0) {
-                    inactiveOrphans.push(exiting);
-                  }
-                });
-                inactiveOrphans.sort();
-                inactiveOrphans.reverse();
-                // Add surrogate exited states for all orphaned descendants of the Deepest Reactivated State
-                surrogateFromPath = surrogateFromPath.concat(map(inactiveOrphans, function (exiting) {
-                  return stateExitedSurrogate(exiting);
-                }));
-                exited = exited.concat(inactiveOrphans);
-              }
+              // We may transition directly to an inactivated state, reactivating it.  In this case, we should
+              // exit all of that state's inactivated children.
+              var inactiveOrphans = stickyTransitions.deepestReactivateChildren;
+              // Add surrogate exited states for all orphaned descendants of the Deepest Reactivated State
+              surrogateFromPath = surrogateFromPath.concat(map(stickyTransitions.deepestReactivateChildren, function (exiting) {
+                return stateExitedSurrogate(exiting);
+              }));
+              exited = exited.concat(inactiveOrphans);
 
               // Replace the .path variables.  toState.path and fromState.path are now ready for a sticky transition.
-              toState.path = surrogateToPath;
               fromState.path = surrogateFromPath;
+              toState.path = surrogateToPath;
 
               var pathMessage = function (state) {
                 return (state.surrogateType ? state.surrogateType + ":" : "") + state.self.name;
@@ -394,75 +470,76 @@ angular.module("ct.ui.router.extras").config(
               err.message !== "transition aborted" &&
               err.message !== "transition superseded") {
               $log.debug("transition failed", err);
-              console.log(err.stack);
+              $log.debug(err.stack);
             }
             return $q.reject(err);
           });
         };
         return $state;
       }]);
+
+
+
+      function debugTransition($log, currentTransition, stickyTransition) {
+        function message(path, index, state) {
+          return (path[index] ? path[index].toUpperCase() + ": " + state.self.name : "(" + state.self.name + ")");
+        }
+
+        var inactiveLogVar = map(stickyTransition.inactives, function (state) {
+          return state.self.name;
+        });
+        var enterLogVar = map(currentTransition.toState.path, function (state, index) {
+          return message(stickyTransition.enter, index, state);
+        });
+        var exitLogVar = map(currentTransition.fromState.path, function (state, index) {
+          return message(stickyTransition.exit, index, state);
+        });
+
+        var transitionMessage = currentTransition.fromState.self.name + ": " +
+          angular.toJson(currentTransition.fromParams) + ": " +
+          " -> " +
+          currentTransition.toState.self.name + ": " +
+          angular.toJson(currentTransition.toParams);
+
+        $log.debug("   Current transition: ", transitionMessage);
+        $log.debug("Before transition, inactives are:   : ", map(_StickyState.getInactiveStates(), function (s) {
+          return s.self.name;
+        }));
+        $log.debug("After transition,  inactives will be: ", inactiveLogVar);
+        $log.debug("Transition will exit:  ", exitLogVar);
+        $log.debug("Transition will enter: ", enterLogVar);
+      }
+
+      function debugViewsAfterSuccess($log, currentState, $state) {
+        $log.debug("Current state: " + currentState.self.name + ", inactive states: ", map(_StickyState.getInactiveStates(), function (s) {
+          return s.self.name;
+        }));
+
+        var viewMsg = function (local, name) {
+          return "'" + name + "' (" + local.$$state.name + ")";
+        };
+        var statesOnly = function (local, name) {
+          return name != 'globals' && name != 'resolve';
+        };
+        var viewsForState = function (state) {
+          var views = map(filterObj(state.locals, statesOnly), viewMsg).join(", ");
+          return "(" + (state.self.name ? state.self.name : "root") + ".locals" + (views.length ? ": " + views : "") + ")";
+        };
+
+        var message = viewsForState(currentState);
+        var parent = currentState.parent;
+        while (parent && parent !== currentState) {
+          if (parent.self.name === "") {
+            // Show the __inactives before showing root state.
+            message = viewsForState($state.$current.path[0]) + " / " + message;
+          }
+          message = viewsForState(parent) + " / " + message;
+          currentState = parent;
+          parent = currentState.parent;
+        }
+
+        $log.debug("Views: " + message);
+      }
     }
   ]
 );
-
-function debugTransition($log, currentTransition, stickyTransition) {
-  function message(path, index, state) {
-    return (path[index] ? path[index].toUpperCase() + ": " + state.self.name : "(" + state.self.name + ")");
-  }
-
-  var inactiveLogVar = map(stickyTransition.inactives, function (state) {
-    return state.self.name;
-  });
-  var enterLogVar = map(currentTransition.toState.path, function (state, index) {
-    return message(stickyTransition.enter, index, state);
-  });
-  var exitLogVar = map(currentTransition.fromState.path, function (state, index) {
-    return message(stickyTransition.exit, index, state);
-  });
-
-  var transitionMessage = currentTransition.fromState.self.name + ": " +
-    angular.toJson(currentTransition.fromParams) + ": " +
-    " -> " +
-    currentTransition.toState.self.name + ": " +
-    angular.toJson(currentTransition.toParams);
-
-  $log.debug("   Current transition: ", transitionMessage);
-  $log.debug("Before transition, inactives are:   : ", map(_StickyState.getInactiveStates(), function (s) {
-    return s.self.name;
-  }));
-  $log.debug("After transition,  inactives will be: ", inactiveLogVar);
-  $log.debug("Transition will exit:  ", exitLogVar);
-  $log.debug("Transition will enter: ", enterLogVar);
-}
-
-function debugViewsAfterSuccess($log, currentState, $state) {
-  $log.debug("Current state: " + currentState.self.name + ", inactive states: ", map(_StickyState.getInactiveStates(), function (s) {
-    return s.self.name;
-  }));
-
-  var viewMsg = function (local, name) {
-    return "'" + name + "' (" + local.$$state.name + ")";
-  };
-  var statesOnly = function (local, name) {
-    return name != 'globals' && name != 'resolve';
-  };
-  var viewsForState = function (state) {
-    var views = map(filterObj(state.locals, statesOnly), viewMsg).join(", ");
-    return "(" + (state.self.name ? state.self.name : "root") + ".locals" + (views.length ? ": " + views : "") + ")";
-  };
-
-  var message = viewsForState(currentState);
-  var parent = currentState.parent;
-  while (parent && parent !== currentState) {
-    if (parent.self.name === "") {
-      // Show the __inactives before showing root state.
-      message = viewsForState($state.$current.path[0]) + " / " + message;
-    }
-    message = viewsForState(parent) + " / " + message;
-    currentState = parent;
-    parent = currentState.parent;
-  }
-
-  $log.debug("Views: " + message);
-}
-
